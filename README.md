@@ -208,19 +208,33 @@ dvc pull
 
 ### Remote
 
-Backblaze B2. Not configured yet.
+Backblaze B2, bucket `dialectguard-dvc-mody457`, endpoint
+`s3.us-east-005.backblazeb2.com`.
 
-Google Drive was evaluated first and ruled out on capacity: 15GB shared across
-Gmail, Drive and Photos left under 700MB free, against 654MB for a single model
-version.
+```bash
+dvc push    # upload tracked artifacts
+dvc pull    # restore them
+```
 
-Until `dvc push` has run and a `dvc pull` has been verified to restore from it,
-DVC gives versioning, not backup. The cache sits on the same physical disk as
-the workspace, and this machine has only one disk.
+`region` is set explicitly to match the endpoint. B2 signs with SigV4, which
+puts the region in the credential scope, so falling back to boto3's `us-east-1`
+default produces signature failures.
 
-The current weights are unreproducible. They came from a Colab session that was
-never saved as a notebook, so keep an independent copy until the remote is live
-and a restore has been tested.
+Credentials live in `.dvc/config.local`, which is gitignored. They are a
+bucket-scoped application key with read and write access. The account master
+key does not work here: B2's S3-compatible API rejects it, and the error it
+returns does not say why.
+
+Google Drive was evaluated first and ruled out on capacity. 15GB shared across
+Gmail, Drive and Photos left under 700MB free, against 654MB for one model
+version. B2's free tier is 10GB, currently 6.5 percent used, so roughly 15
+versions fit.
+
+A restore has not been verified yet. `dvc push` has run and the remote holds all
+five objects, but nothing has been pulled back from it into an empty cache. Keep
+an independent copy of `models/dialectguard_model/` until that test passes. The
+current weights are unreproducible: they came from a Colab session that was
+never saved as a notebook.
 
 ## Tests
 
