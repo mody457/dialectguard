@@ -1,0 +1,5 @@
+# Test tooling. Kept out of requirements.txt so the runtime image does not
+# ship a test client.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1

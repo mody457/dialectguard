@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+
+# Model weights are versioned with DVC or Git LFS, never committed directly.
+*.safetensors
+*.bin
+*.pt
