@@ -1,2 +1,7 @@
 [core]
     analytics = false
+    remote = storage
+['remote "storage"']
+    url = s3://dialectguard-dvc-mody457/dialectguard
+    endpointurl = https://s3.us-east-005.backblazeb2.com
+    region = us-east-005
