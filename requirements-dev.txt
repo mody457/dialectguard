@@ -3,3 +3,7 @@
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+
+# Model artifact versioning.
+dvc==3.67.1
+dvc-s3==3.3.0

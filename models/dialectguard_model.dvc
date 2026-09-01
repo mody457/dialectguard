@@ -1,0 +1,6 @@
+outs:
+- md5: 6ed0dee5c6b73c6003cc953e1f4fcc43.dir
+  size: 654100335
+  nfiles: 4
+  hash: md5
+  path: dialectguard_model

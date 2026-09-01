@@ -175,6 +175,53 @@ debugging.
 {"timestamp": "2026-09-01T18:40:18.905467+00:00", "level": "INFO", "logger": "app.main", "message": "prediction", "event": "prediction", "input_length": 27, "dialect": "BH", "confidence": 0.613, "latency_ms": 116.37}
 ```
 
+## Model versioning (DVC)
+
+Model artifacts are versioned with DVC rather than committed to git.
+`models/dialectguard_model/` is gitignored. `models/dialectguard_model.dvc`
+holds the content hash and is what git tracks.
+
+```bash
+dvc status                          # workspace against the tracked version
+dvc add models/dialectguard_model   # after replacing the weights
+dvc checkout                        # restore the version this commit points at
+```
+
+The directory is tracked as a single artifact, so weights, config and tokenizer
+are versioned together and cannot drift apart.
+
+### Cache location
+
+The cache lives at `~/.dvc-cache/DialectGuard`, deliberately outside the
+project. This repo sits inside a OneDrive folder, and DVC's default cache
+(`.dvc/cache`) would hand OneDrive a second copy of the weights to sync on
+every model version.
+
+That path is set in `.dvc/config.local`, which is gitignored, so no absolute
+local path leaks into the repo and nothing breaks when the project is built in
+a container. On a fresh clone it has to be set again:
+
+```bash
+dvc cache dir --local /path/outside/any/sync/folder
+dvc pull
+```
+
+### Remote
+
+Backblaze B2. Not configured yet.
+
+Google Drive was evaluated first and ruled out on capacity: 15GB shared across
+Gmail, Drive and Photos left under 700MB free, against 654MB for a single model
+version.
+
+Until `dvc push` has run and a `dvc pull` has been verified to restore from it,
+DVC gives versioning, not backup. The cache sits on the same physical disk as
+the workspace, and this machine has only one disk.
+
+The current weights are unreproducible. They came from a Colab session that was
+never saved as a notebook, so keep an independent copy until the remote is live
+and a restore has been tested.
+
 ## Tests
 
 ```bash
