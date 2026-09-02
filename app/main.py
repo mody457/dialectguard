@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, status
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import Response
 
 from app import __version__
 from app.config import (
@@ -23,12 +24,13 @@ from app.config import (
     ID_TO_DIALECT,
     LOG_RAW_TEXT,
     MAX_INPUT_CHARS,
+    MAX_REQUEST_BODY_BYTES,
     MAX_SEQUENCE_LENGTH,
     MODEL_DIR,
     MODEL_MACRO_F1,
     MODEL_VERSION,
 )
-from app.errors import APIError, register_exception_handlers
+from app.errors import APIError, error_response, register_exception_handlers
 from app.logging_config import configure_logging
 from app.model import DialectClassifier
 from app.schemas import (
@@ -69,6 +71,7 @@ and whitespace is normalized, matching the training pipeline exactly.
 """.strip()
 
 ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
+    413: {"model": ErrorResponse, "description": "Request body over the byte cap."},
     422: {"model": ErrorResponse, "description": "Input rejected before inference."},
     503: {"model": ErrorResponse, "description": "Model is not loaded."},
 }
@@ -97,6 +100,45 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
+
+
+@app.middleware("http")
+async def enforce_request_body_limit(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject oversized bodies from Content-Length, before they are buffered.
+
+    The character cap in validate_and_clean runs only once the entire body has
+    been read into memory, so by itself it does not stop a caller from making
+    the process hold a large payload. This check is cheap and happens first.
+
+    The error is returned rather than raised because exceptions from middleware
+    bypass the registered handlers, which would produce a body shape no client
+    is expecting.
+
+    A chunked request carries no Content-Length and slips past this. Closing
+    that gap here means buffering the stream a second time, so the reverse
+    proxy in front of the service should carry a body limit of its own.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            body_bytes = int(declared)
+        except ValueError:
+            return error_response(
+                status.HTTP_400_BAD_REQUEST,
+                "INVALID_CONTENT_LENGTH",
+                "Content-Length header is not an integer.",
+            )
+        if body_bytes > MAX_REQUEST_BODY_BYTES:
+            return error_response(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                "REQUEST_BODY_TOO_LARGE",
+                f"Request body is {body_bytes} bytes, "
+                f"the maximum is {MAX_REQUEST_BODY_BYTES}.",
+            )
+    return await call_next(request)
+
 
 router = APIRouter(prefix=API_PREFIX, tags=["prediction"])
 

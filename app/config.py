@@ -38,6 +38,14 @@ MAX_SEQUENCE_LENGTH = 128
 # looser than MAX_SEQUENCE_LENGTH implies.
 MAX_INPUT_CHARS = 1000
 
+# Hard cap on the raw request body, checked against Content-Length before the
+# body is read. MAX_INPUT_CHARS bounds the text field, but that check runs only
+# after the whole body has been buffered into memory, so on its own it does not
+# stop a caller from making the process hold an arbitrarily large payload. The
+# allowance over MAX_INPUT_CHARS covers JSON framing and the worst-case
+# encoding of Arabic, six bytes per character when a client escapes it.
+MAX_REQUEST_BODY_BYTES = 8 * 1024
+
 # Fraction of alphabetic characters that must be Arabic script for the input
 # to be considered in-domain. The model has no notion of "not Arabic", so
 # without this gate it would return a confident label for English text.

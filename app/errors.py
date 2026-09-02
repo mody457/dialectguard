@@ -76,7 +76,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def handle_http_exception(
         _: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
-        phrase = HTTPStatus(exc.status_code).phrase.upper().replace(" ", "_")
+        # A non-standard status code has no HTTPStatus member. Letting that
+        # ValueError escape would turn a handled 4xx into an unhandled 500,
+        # raised from inside the handler meant to prevent exactly that.
+        try:
+            phrase = HTTPStatus(exc.status_code).phrase.upper().replace(" ", "_")
+        except ValueError:
+            phrase = "HTTP_ERROR"
         return error_response(exc.status_code, phrase, str(exc.detail))
 
     @app.exception_handler(Exception)

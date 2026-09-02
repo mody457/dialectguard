@@ -14,10 +14,6 @@ from datetime import datetime, timezone
 
 from app.config import LOG_LEVEL
 
-# Attributes LogRecord always carries. Anything outside this set that appears
-# on a record is caller-supplied and gets merged into the JSON line.
-_RESERVED_RECORD_KEYS = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__)
-
 
 class JsonLogFormatter(logging.Formatter):
     """Render a LogRecord as a single-line JSON object."""
