@@ -32,13 +32,15 @@ class Prediction:
 class DialectClassifier:
     """Wraps the fine-tuned MARBERTv2 checkpoint for single-text inference."""
 
-    def __init__(self, tokenizer: AutoTokenizer, model: torch.nn.Module, model_dir: Path):
+    def __init__(
+        self, tokenizer: AutoTokenizer, model: torch.nn.Module, model_dir: Path
+    ):
         self._tokenizer = tokenizer
         self._model = model
         self.model_dir = model_dir
 
     @classmethod
-    def load(cls, model_dir: Path) -> "DialectClassifier":
+    def load(cls, model_dir: Path) -> DialectClassifier:
         """Load tokenizer and weights from a local directory.
 
         The label count is checked against ID_TO_DIALECT here rather than at
@@ -67,7 +69,12 @@ class DialectClassifier:
         model.eval()
         logger.info(
             "model_loaded",
-            extra={"context": {"model_dir": str(model_dir), "num_labels": expected_labels}},
+            extra={
+                "context": {
+                    "model_dir": str(model_dir),
+                    "num_labels": expected_labels,
+                }
+            },
         )
         return cls(tokenizer=tokenizer, model=model, model_dir=model_dir)
 

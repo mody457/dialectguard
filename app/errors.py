@@ -65,7 +65,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Pydantic's own 422 body has a different shape from ours, so it is
         # reduced to the first problem and re-emitted in the canonical form.
         first = exc.errors()[0] if exc.errors() else {}
-        location = ".".join(str(part) for part in first.get("loc", ()) if part != "body")
+        location = ".".join(
+            str(part) for part in first.get("loc", ()) if part != "body"
+        )
         detail = first.get("msg", "Request body failed validation.")
         message = f"{location}: {detail}" if location else detail
         return error_response(

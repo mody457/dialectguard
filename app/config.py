@@ -61,7 +61,10 @@ API_VERSION = "v1"
 # --- Environment-dependent settings. ---
 
 MODEL_DIR = Path(
-    os.getenv("DIALECTGUARD_MODEL_DIR", str(PROJECT_ROOT / "models" / "dialectguard_model"))
+    os.getenv(
+        "DIALECTGUARD_MODEL_DIR",
+        str(PROJECT_ROOT / "models" / "dialectguard_model"),
+    )
 )
 
 MODEL_VERSION = os.getenv("DIALECTGUARD_MODEL_VERSION", "dialectguard-marbertv2-v1")
@@ -70,7 +73,11 @@ LOG_LEVEL = os.getenv("DIALECTGUARD_LOG_LEVEL", "INFO").upper()
 
 # When true, prediction logs include the raw input text. Off by default
 # because request bodies are user content.
-LOG_RAW_TEXT = os.getenv("DIALECTGUARD_LOG_RAW_TEXT", "false").lower() in {"1", "true", "yes"}
+LOG_RAW_TEXT = os.getenv("DIALECTGUARD_LOG_RAW_TEXT", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 
 def resolve_git_commit() -> str | None:

@@ -1,0 +1,17 @@
+# Tool configuration only. This project is a service, not a distributable
+# package, so there is deliberately no [project] or [build-system] table.
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/W/F are the pycodestyle and pyflakes baseline. I keeps imports ordered, UP
+# keeps syntax current for the pinned Python, B catches real bugs, and SIM/C4/RET
+# catch avoidable complexity.
+#
+# ARG is deliberately absent. Test code legitimately takes arguments it does not
+# use: a pytest fixture requested purely for ordering, or a stub whose signature
+# has to match the function it replaces. Enabling it would mean scattering noqa
+# comments over correct code.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "RET"]

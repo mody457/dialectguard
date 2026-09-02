@@ -23,12 +23,14 @@ def test_strips_hashtags() -> None:
 
 
 def test_strips_urls() -> None:
-    assert preprocess(f"{ARABIC_SENTENCE} https://example.com/a/b?c=1") == ARABIC_SENTENCE
+    assert (
+        preprocess(f"{ARABIC_SENTENCE} https://example.com/a/b?c=1") == ARABIC_SENTENCE
+    )
     assert preprocess(f"www.example.com {ARABIC_SENTENCE}") == ARABIC_SENTENCE
 
 
 def test_normalizes_whitespace() -> None:
-    assert preprocess(f"  شلونك\t\tاليوم\n\n ") == ARABIC_SENTENCE
+    assert preprocess("  شلونك\t\tاليوم\n\n ") == ARABIC_SENTENCE
 
 
 def test_strips_all_artifacts_together() -> None:
