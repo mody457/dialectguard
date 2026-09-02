@@ -69,6 +69,10 @@ Interactive docs at http://127.0.0.1:8000/docs.
 
 ## Endpoints
 
+`/health` and `/version` sit outside `/api/v1/` on purpose. They describe
+the deployment rather than the classification contract, so they stay put when
+the API version moves.
+
 ### POST /api/v1/predict
 
 ```bash
@@ -111,6 +115,8 @@ Every failure returns the same envelope, with no stack traces:
 | Code | Meaning |
 |---|---|
 | `INVALID_REQUEST_BODY` | Body failed schema validation, for example `text` missing |
+| `REQUEST_BODY_TOO_LARGE` | Request body exceeded 8192 bytes (413) |
+| `INVALID_CONTENT_LENGTH` | `Content-Length` header was not an integer (400) |
 | `EMPTY_TEXT` | `text` was empty or whitespace only |
 | `TEXT_TOO_LONG` | `text` exceeded 1000 characters |
 | `TEXT_EMPTY_AFTER_PREPROCESSING` | `text` was nothing but mentions, hashtags or URLs |
@@ -130,6 +136,14 @@ truncated sequence still yields a confident-looking label, and the caller has
 no way to tell that the tail of their text was dropped. For an API whose output
 drives routing decisions, failing loudly beats answering quietly on partial
 input. Worth revisiting if a real workload turns out to send long text often.
+
+The 1000 character cap is a field-level check, which by definition runs after
+the whole body is already in memory. So the body itself is capped separately at
+8192 bytes from `Content-Length`, before it is read. The two limits are not
+redundant: the first bounds what reaches the model, the second bounds what
+reaches the process. Chunked requests carry no `Content-Length` and bypass the
+second, so a reverse proxy in front of the service should set its own body
+limit.
 
 Padding also differs between training and serving, and that one is a non-issue.
 Training padded every sequence to a full 128 tokens with
