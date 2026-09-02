@@ -25,7 +25,9 @@ EXPECTED_SOURCE_IDS = [0, 2, 3, 4, 13, 15]
 def test_source_to_model_labels_matches_the_training_notebook() -> None:
     """The mapping must reproduce old_to_new from the training notebook."""
     mapping = evaluate.source_to_model_labels()
-    assert mapping == dict(zip(EXPECTED_SOURCE_IDS, range(len(ID_TO_DIALECT))))
+    assert mapping == dict(
+        zip(EXPECTED_SOURCE_IDS, range(len(ID_TO_DIALECT)), strict=True)
+    )
 
 
 def test_source_to_model_labels_rejects_an_unknown_dialect(

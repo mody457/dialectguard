@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.config import LOG_LEVEL
 
@@ -21,7 +21,7 @@ class JsonLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
             "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
+                record.created, tz=UTC
             ).isoformat(),
             "level": record.levelname,
             "logger": record.name,

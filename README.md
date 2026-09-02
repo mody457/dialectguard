@@ -256,6 +256,17 @@ an independent copy of `models/dialectguard_model/` until that test passes. The
 current weights are unreproducible: they came from a Colab session that was
 never saved as a notebook.
 
+## Lint
+
+```bash
+ruff check .
+```
+
+Configured in `pyproject.toml`. The `ARG` rules are deliberately off: test code
+legitimately takes arguments it does not use, such as a fixture requested only
+for ordering or a stub whose signature has to match what it replaces. Turning
+them on would mean scattering `noqa` over correct code.
+
 ## Tests
 
 ```bash
@@ -371,6 +382,36 @@ so scale with replicas rather than workers.
 Measured on a first run: healthy after model load, 366MB resident, first
 prediction 393ms.
 
+## CI
+
+`.github/workflows/ci.yml` runs lint, tests, the eval gate, then the Docker build
+and push, as four sequential jobs. They are separate jobs rather than steps so
+the stage order is visible in the Actions UI and a lint failure costs seconds
+instead of waiting on a 654MB model download.
+
+Images publish to `ghcr.io/mody457/dialectguard`, tagged with the commit SHA and
+`latest`, only on a push to main. Pull requests run everything through the eval
+gate but publish nothing.
+
+### Required secrets
+
+| Secret | Used for |
+|---|---|
+| `B2_ACCESS_KEY_ID` | pulling the checkpoint and splits from DVC |
+| `B2_SECRET_ACCESS_KEY` | the same |
+
+Use a read-only, bucket-scoped B2 application key. CI only ever reads from the
+remote, so a read-write key would hand the pipeline more authority than it needs.
+`GITHUB_TOKEN` is supplied by Actions and needs no setup; the docker job requests
+`packages: write` against it.
+
+### Why the DVC cache matters
+
+The checkpoint is restored from the Actions cache, keyed on the DVC pointer
+files, so only the first run after the model or data changes pays B2 egress.
+The bucket's free allowance is roughly 1GB per day and three uncached heavy jobs
+would spend twice that in a single run.
+
 ## Not built yet
 
-Rate limiting on `/api/v1/predict`, CI and drift monitoring.
+Rate limiting on `/api/v1/predict`, and drift monitoring.

@@ -1,0 +1,194 @@
+# Stages run as separate sequential jobs rather than steps in one job, so the
+# order is visible in the Actions UI and a lint failure costs seconds instead of
+# waiting on a 654MB model download.
+#
+# Each job that needs the checkpoint restores it from the Actions cache, keyed on
+# the DVC pointer files. Only the first run after the model or data changes pays
+# B2 egress; every later run reads the cache for free. That matters because the
+# bucket's free egress allowance is about 1GB per day and an uncached run of the
+# three heavy jobs would spend twice that.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Only ruff is installed here. Pulling the full dev requirements would
+      # drag in torch to check formatting. The pin is read out of
+      # requirements-dev.txt so the two cannot drift apart.
+      - name: Install ruff
+        run: pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+
+      - name: Lint
+        run: ruff check .
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Torch from PyTorch's CPU index, matching the Dockerfile. The PyPI wheel
+      # bundles CUDA, which a runner will never use and takes minutes to fetch.
+      - name: Install dependencies
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            "$(grep -E '^torch==' requirements.txt)"
+          pip install -r requirements-dev.txt
+
+      - name: Cache DVC artifacts
+        uses: actions/cache@v4
+        with:
+          path: .dvc/cache
+          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+
+      # The suite loads the real checkpoint through the app lifespan, so the
+      # weights have to be present before pytest runs.
+      - name: Fetch the model
+        run: dvc pull models/dialectguard_model.dvc
+
+      - name: Run tests
+        run: pytest -q
+
+  eval:
+    name: Eval gate
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu \
+            "$(grep -E '^torch==' requirements.txt)"
+          pip install -r requirements-dev.txt
+
+      - name: Cache DVC artifacts
+        uses: actions/cache@v4
+        with:
+          path: .dvc/cache
+          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+
+      - name: Fetch the model and the splits
+        run: dvc pull models/dialectguard_model.dvc data/processed.dvc
+
+      # Exits non-zero below the macro F1 floor, which blocks the Docker build.
+      # A reordered label map or a weakened preprocessing step lands here.
+      - name: Score the checkpoint
+        run: python -m eval_harness.evaluate
+
+      - name: Upload the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: docs/
+          if-no-files-found: error
+
+  docker:
+    name: Docker build and push
+    needs: eval
+    # Images are published only for merged work. Pull requests still get lint,
+    # tests and the eval gate, they just do not push an artifact.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Only DVC is needed here. The image builds its own dependencies.
+      - name: Install DVC
+        run: |
+          pip install "$(grep -E '^dvc==' requirements-dev.txt)" \
+                      "$(grep -E '^dvc-s3==' requirements-dev.txt)"
+
+      - name: Cache DVC artifacts
+        uses: actions/cache@v4
+        with:
+          path: .dvc/cache
+          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+
+      # models/ is gitignored, so a fresh checkout has no weights and the
+      # Dockerfile's COPY would fail. The image bakes the checkpoint in.
+      - name: Fetch the model
+        run: dvc pull models/dialectguard_model.dvc
+
+      # /version documents git_commit as a short hash, and app/config.py reads
+      # it from DIALECTGUARD_GIT_COMMIT. Passing the full 40 character SHA would
+      # quietly break that contract.
+      - name: Resolve the short commit
+        id: commit
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: GIT_COMMIT=${{ steps.commit.outputs.short }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

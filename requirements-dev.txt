@@ -14,3 +14,7 @@ pandas==3.0.2
 pyarrow==24.0.0
 scikit-learn==1.8.0
 matplotlib==3.10.8
+
+# Linting. Pinned so CI and local runs flag the same things: an unpinned linter
+# turns an unrelated release into a red build.
+ruff==0.16.5
