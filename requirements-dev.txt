@@ -7,3 +7,10 @@ httpx==0.28.1
 # Model artifact versioning.
 dvc==3.67.1
 dvc-s3==3.3.0
+
+# Eval harness. Deliberately not runtime dependencies: the container serves
+# predictions, it does not score them.
+pandas==3.0.2
+pyarrow==24.0.0
+scikit-learn==1.8.0
+matplotlib==3.10.8
