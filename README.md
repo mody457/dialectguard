@@ -189,15 +189,21 @@ debugging.
 {"timestamp": "2026-09-01T18:40:18.905467+00:00", "level": "INFO", "logger": "app.main", "message": "prediction", "event": "prediction", "input_length": 27, "dialect": "BH", "confidence": 0.613, "latency_ms": 116.37}
 ```
 
-## Model versioning (DVC)
+## Data and model versioning (DVC)
 
-Model artifacts are versioned with DVC rather than committed to git.
-`models/dialectguard_model/` is gitignored. `models/dialectguard_model.dvc`
-holds the content hash and is what git tracks.
+Model artifacts and the dataset splits are versioned with DVC rather than
+committed to git. `models/dialectguard_model/` and `data/processed/` are
+gitignored; `models/dialectguard_model.dvc` and `data/processed.dvc` hold the
+content hashes and are what git tracks.
+
+The splits are the ones the checkpoint was trained and evaluated on, recovered
+from Drive. The eval harness needs `data/processed/gulf_test.parquet`, so CI
+has to `dvc pull` before it can run the gate.
 
 ```bash
 dvc status                          # workspace against the tracked version
 dvc add models/dialectguard_model   # after replacing the weights
+dvc add data/processed              # after changing the splits
 dvc checkout                        # restore the version this commit points at
 ```
 
@@ -256,10 +262,55 @@ never saved as a notebook.
 pytest
 ```
 
-34 tests. `tests/test_api.py` exercises the full HTTP path with the real model
+49 tests. `tests/test_api.py` exercises the full HTTP path with the real model
 loaded. It asserts status codes and response shape, not which dialect comes
 back, because at 61.8% macro F1 the label for any single example is not a
 stable contract.
+
+`tests/test_eval_harness.py` never loads the checkpoint. Scoring the real split
+takes minutes, so the model call is stubbed and what is tested is the wiring
+around it: the label mapping, the row accounting and the threshold gate. Those
+are the parts that fail quietly.
+
+## Evaluation
+
+```bash
+python -m eval_harness.evaluate
+```
+
+Scores the checkpoint on the held-out test split and exits non-zero if macro F1
+falls below the floor. This is the gate CI runs before any Docker build.
+
+Current result on the 3366 row test split:
+
+| | macro F1 | accuracy |
+|---|---|---|
+| MARBERTv2 fine-tuned | 0.618 | 0.628 |
+
+Per-country F1 ranges from 0.561 for Bahrain to 0.697 for Kuwait. The full
+breakdown and the confusion matrix are in `docs/`, regenerated on every run.
+
+The gate floor is 0.60, set below the documented 0.618 so that library drift
+cannot fail a build over noise. A real regression costs far more than two
+points: a reordered label map or a dropped preprocessing step is catastrophic,
+not marginal.
+
+Useful flags: `--split validation`, `--limit N` for a quick smoke run,
+`--no-plot` to skip the heatmap, `--min-macro-f1` to override the floor.
+
+### Why the harness is also a preprocessing check
+
+The cleaning code used by the clean retrain was never saved, so it cannot be
+diffed against `app/preprocessing.py`. Running the raw test split through
+`app/preprocessing.py` and landing at the documented 0.618 is the evidence that
+the two agree. A large gap would mean a train/serve skew that no unit test
+would catch.
+
+One deliberate difference from the serving path: training tokenized with
+`truncation=True`, so long examples were clipped. The API rejects them instead.
+The harness follows training rather than serving, because it measures the
+checkpoint against the number training produced. Rejecting would change the
+denominator.
 
 ## Layout
 
@@ -273,11 +324,14 @@ app/
   errors.py          uniform error envelope and handlers
   logging_config.py  JSON line formatter
   main.py            app, routes, lifespan
+eval_harness/
+  evaluate.py        offline scoring and the CI F1 gate
 tests/
+data/processed/      train, validation and test splits (DVC tracked)
+docs/                eval report and confusion matrix, generated
 models/dialectguard_model/
 ```
 
 ## Not built yet
 
-Rate limiting on `/api/v1/predict`, the eval harness with its F1 gate, Docker,
-CI and drift monitoring.
+Rate limiting on `/api/v1/predict`, Docker, CI and drift monitoring.
