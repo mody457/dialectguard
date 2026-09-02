@@ -332,6 +332,45 @@ docs/                eval report and confusion matrix, generated
 models/dialectguard_model/
 ```
 
+## Docker
+
+```bash
+dvc pull                                  # a fresh clone has no weights
+docker build --build-arg GIT_COMMIT="$(git rev-parse --short HEAD)" -t dialectguard:local .
+docker run -d -p 8000:8000 dialectguard:local
+```
+
+Multi-stage. Dependencies resolve into a virtualenv in the build stage which the
+runtime stage copies wholesale, so no build toolchain ships in the image.
+
+Torch is installed from PyTorch's CPU index, not PyPI. The default wheel bundles
+CUDA for a service that will never see a GPU. The pin is read out of
+`requirements.txt` at build time rather than repeated in the Dockerfile, so the
+two cannot drift apart. A built image reports `torch 2.11.0+cpu` and ships no
+nvidia packages.
+
+Size depends on which number you mean: about 2.0GB unpacked on a node, 0.89GB
+compressed to pull. The virtualenv is 1.18GB of that and the checkpoint 654MB.
+
+The checkpoint is baked in rather than mounted at runtime, so an image tag
+identifies code and weights together and a rollback is one tag instead of two
+things kept in sync. The cost is that CI has to `dvc pull` before `docker
+build`, since `models/` is gitignored.
+
+`.dockerignore` denies everything and re-includes only `app`, `models` and
+`requirements.txt`. An allowlist keeps the next dataset or notebook out of the
+build context by default instead of by someone remembering to add it.
+
+The container runs as uid 10001. `HEALTHCHECK` probes `/health`, which reports
+whether the weights are in memory rather than whether the process is alive, with
+a start period covering model load.
+
+One uvicorn worker on purpose. Each worker holds its own copy of the checkpoint,
+so scale with replicas rather than workers.
+
+Measured on a first run: healthy after model load, 366MB resident, first
+prediction 393ms.
+
 ## Not built yet
 
-Rate limiting on `/api/v1/predict`, Docker, CI and drift monitoring.
+Rate limiting on `/api/v1/predict`, CI and drift monitoring.

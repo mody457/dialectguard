@@ -1,0 +1,13 @@
+# Deny everything, then re-include only what the image needs. An allowlist
+# means a new dataset, notebook or cache directory stays out of the build
+# context by default, rather than by someone remembering to add it here.
+#
+# The checkpoint dominates the context at 651MB and is included deliberately.
+# The image bakes the model in so a container is self-contained and a rollback
+# is a single image tag. Because models/ is gitignored and DVC tracked, a fresh
+# clone has no weights: CI has to run "dvc pull" before "docker build".
+*
+
+!app
+!models
+!requirements.txt
