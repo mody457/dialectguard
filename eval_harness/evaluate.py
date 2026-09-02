@@ -172,7 +172,8 @@ def score(
         macro_f1=float(np.mean(per_class)),
         accuracy=float(accuracy_score(y_true, y_pred)),
         per_class_f1={
-            code: float(value) for code, value in zip(ID_TO_DIALECT, per_class)
+            code: float(value)
+            for code, value in zip(ID_TO_DIALECT, per_class, strict=True)
         },
         support={
             code: int((y_true == index).sum())
@@ -189,7 +190,7 @@ def confusion_as_markdown(result: EvalResult) -> str:
     divider = "|---" * (len(ID_TO_DIALECT) + 1) + "|"
     rows = [
         f"| **{code}** | " + " | ".join(str(count) for count in row) + " |"
-        for code, row in zip(ID_TO_DIALECT, result.confusion)
+        for code, row in zip(ID_TO_DIALECT, result.confusion, strict=True)
     ]
     return "\n".join([header, divider, *rows])
 
