@@ -7,6 +7,27 @@
 # B2 egress; every later run reads the cache for free. That matters because the
 # bucket's free egress allowance is about 1GB per day and an uncached run of the
 # three heavy jobs would spend twice that.
+#
+# Actions caches are scoped to the branch that wrote them. A pull request can
+# read main's caches, but main cannot read a pull request's, so the first merge
+# re-pulls everything the pull request already fetched. The dvc- prefix in
+# restore-keys is the fallback for that and for a changed pointer file: an older
+# cache turns a full 654MB pull into a delta. It stays in the list for good.
+# Dropping it once a v2 entry exists on main would bring back the re-pull on
+# every merge, which is the larger of the two costs this file avoids. DVC's
+# cache is content addressed, so stale objects in a restored cache cost disk and
+# nothing else. Each new checkpoint version adds its own 654MB, and GitHub
+# evicts least recently used entries at the 10GB repo limit.
+#
+# The key carries a v2 namespace because a cache entry is immutable once
+# written. The v1 entry on main holds the checkpoint alone, and no later run
+# could add the splits to it, since an exact key hit skips the save. Writing
+# under a new namespace is the only way to replace what a key holds. What that
+# buys is narrow. The eval job pulls the splits as well as the checkpoint, and
+# against a v1 entry it re-downloaded the same 19MB every run. A complete v2
+# entry ends that, and together with the checkout above it means a warm cache
+# touches B2 not at all. The docker job is unaffected either way. It pulls the
+# checkpoint alone and already restored that in full.
 
 name: CI
 
@@ -72,10 +93,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .dvc/cache
-          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          key: dvc-v2-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          restore-keys: |
+            dvc-v2-
+            dvc-
 
       # The suite loads the real checkpoint through the app lifespan, so the
-      # weights have to be present before pytest runs.
+      # weights have to be present before pytest runs. The splits come down here
+      # too, though nothing in the suite reads them, because this is the first
+      # job to touch the cache and one key has to describe one whole cache.
+      # Leaving them out is what cost the eval job 19MB on every run: its restore
+      # hit the exact key, so its own save was skipped and the splits never
+      # landed in the cache.
       #
       # checkout materializes the workspace from .dvc/cache and never opens the
       # remote. pull is fetch plus checkout, and its fetch half runs an
@@ -84,10 +113,10 @@ jobs:
       # fails. On a warm cache that trades a hard dependency on B2 being
       # reachable for zero downloaded bytes. The fallback covers a cold or
       # partial cache, the only case that still needs the remote.
-      - name: Fetch the model
+      - name: Fetch the model and the splits
         run: |
-          dvc checkout models/dialectguard_model.dvc ||
-            dvc pull models/dialectguard_model.dvc
+          dvc checkout models/dialectguard_model.dvc data/processed.dvc ||
+            dvc pull models/dialectguard_model.dvc data/processed.dvc
 
       - name: Run tests
         run: pytest -q
@@ -118,7 +147,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .dvc/cache
-          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          key: dvc-v2-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          restore-keys: |
+            dvc-v2-
+            dvc-
 
       - name: Fetch the model and the splits
         run: |
@@ -170,7 +202,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .dvc/cache
-          key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          key: dvc-v2-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
+          restore-keys: |
+            dvc-v2-
+            dvc-
 
       # models/ is gitignored, so a fresh checkout has no weights and the
       # Dockerfile's COPY would fail. The image bakes the checkpoint in.
