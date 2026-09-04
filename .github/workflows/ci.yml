@@ -76,8 +76,18 @@ jobs:
 
       # The suite loads the real checkpoint through the app lifespan, so the
       # weights have to be present before pytest runs.
+      #
+      # checkout materializes the workspace from .dvc/cache and never opens the
+      # remote. pull is fetch plus checkout, and its fetch half runs an
+      # unconditional fs.exists() probe against the remote before it works out
+      # whether anything is missing, then raises DownloadError if that probe
+      # fails. On a warm cache that trades a hard dependency on B2 being
+      # reachable for zero downloaded bytes. The fallback covers a cold or
+      # partial cache, the only case that still needs the remote.
       - name: Fetch the model
-        run: dvc pull models/dialectguard_model.dvc
+        run: |
+          dvc checkout models/dialectguard_model.dvc ||
+            dvc pull models/dialectguard_model.dvc
 
       - name: Run tests
         run: pytest -q
@@ -111,7 +121,9 @@ jobs:
           key: dvc-${{ hashFiles('models/dialectguard_model.dvc', 'data/processed.dvc') }}
 
       - name: Fetch the model and the splits
-        run: dvc pull models/dialectguard_model.dvc data/processed.dvc
+        run: |
+          dvc checkout models/dialectguard_model.dvc data/processed.dvc ||
+            dvc pull models/dialectguard_model.dvc data/processed.dvc
 
       # Exits non-zero below the macro F1 floor, which blocks the Docker build.
       # A reordered label map or a weakened preprocessing step lands here.
@@ -163,7 +175,9 @@ jobs:
       # models/ is gitignored, so a fresh checkout has no weights and the
       # Dockerfile's COPY would fail. The image bakes the checkpoint in.
       - name: Fetch the model
-        run: dvc pull models/dialectguard_model.dvc
+        run: |
+          dvc checkout models/dialectguard_model.dvc ||
+            dvc pull models/dialectguard_model.dvc
 
       # /version documents git_commit as a short hash, and app/config.py reads
       # it from DIALECTGUARD_GIT_COMMIT. Passing the full 40 character SHA would
