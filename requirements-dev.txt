@@ -15,6 +15,11 @@ pyarrow==24.0.0
 scikit-learn==1.8.0
 matplotlib==3.10.8
 
+# Drift monitoring. Heavier than the one line suggests: Evidently pulls in
+# litestar, plotly, statsmodels and nltk to render its reports. All of that is
+# dev only, so none of it reaches the runtime image.
+evidently==0.7.21
+
 # Linting. Pinned so CI and local runs flag the same things: an unpinned linter
 # turns an unrelated release into a red build.
 ruff==0.16.5
