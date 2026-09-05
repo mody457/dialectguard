@@ -116,19 +116,6 @@ def test_load_in_distribution_is_deterministic_for_a_seed(
     assert len(first) == 30
 
 
-def test_unwired_loaders_name_what_they_need() -> None:
-    """An unwired source is a setup problem, so the message has to be usable."""
-    with pytest.raises(samples.SampleSourceUnavailable) as excinfo:
-        samples.load_category("msa", 10, samples.RANDOM_SEED)
-    assert "no source wired up" in str(excinfo.value)
-
-
-def test_load_msa_explains_why_qadi_cannot_supply_it() -> None:
-    """The obvious fix is wrong, so the message has to rule it out."""
-    with pytest.raises(samples.SampleSourceUnavailable, match="no MSA class"):
-        samples.load_msa(10, samples.RANDOM_SEED)
-
-
 def test_load_category_rejects_an_unknown_category() -> None:
     with pytest.raises(KeyError, match="gulf_arabic"):
         samples.load_category("gulf_arabic", 10, samples.RANDOM_SEED)
@@ -287,3 +274,101 @@ def test_draw_distinct_counts_distinct_rows_not_raw_rows() -> None:
     series = pd.Series(["one", "one", "two", "two"])
     with pytest.raises(samples.SampleSourceUnavailable, match="2 distinct"):
         samples.draw_distinct(series, 3, samples.RANDOM_SEED, "stub")
+
+
+def msa_frame(rows: int) -> pd.DataFrame:
+    """Stand in for the headline corpus, ASCII so the console is safe.
+
+    Carries a body column too, so a test can tell the two apart.
+    """
+    return pd.DataFrame(
+        {
+            "title": [f"headline {index}" for index in range(rows)],
+            "text": [f"article body {index} " * 200 for index in range(rows)],
+        }
+    )
+
+
+def test_load_msa_returns_the_count_all_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: msa_frame(500))
+    texts = samples.load_msa(300, samples.RANDOM_SEED)
+    assert len(texts) == 300
+    assert len(set(texts)) == 300
+
+
+def test_load_msa_takes_headlines_not_article_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bodies average 2500 characters and would be refused on length."""
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: msa_frame(100))
+    texts = samples.load_msa(50, samples.RANDOM_SEED)
+    assert all(text.startswith("headline") for text in texts)
+
+
+def test_load_msa_is_deterministic_for_a_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: msa_frame(500))
+    first = samples.load_msa(50, 7)
+    assert first == samples.load_msa(50, 7)
+    assert first != samples.load_msa(50, 8)
+
+
+def test_load_msa_rejects_a_source_without_the_headline_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        samples,
+        "fetch_hub_split",
+        lambda repo, split: pd.DataFrame({"text": ["a body"]}),
+    )
+    with pytest.raises(samples.SampleSourceUnavailable, match="title"):
+        samples.load_msa(10, samples.RANDOM_SEED)
+
+
+def test_load_msa_refuses_to_oversample(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: msa_frame(20))
+    with pytest.raises(samples.SampleSourceUnavailable, match="20 distinct"):
+        samples.load_msa(50, samples.RANDOM_SEED)
+
+
+class StubHubApi:
+    """Stands in for HfApi so the fetch path is testable without a network."""
+
+    def __init__(self, files: list[str]) -> None:
+        self.files = files
+
+    def list_repo_files(self, repo_id: str, repo_type: str) -> list[str]:
+        return self.files
+
+
+def test_fetch_hub_split_reports_a_split_with_no_parquet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A renamed split has to name itself rather than fail on a download."""
+    monkeypatch.setattr(
+        samples, "HfApi", lambda: StubHubApi(["data/train-00000-of-00001.parquet"])
+    )
+    with pytest.raises(samples.SampleSourceUnavailable, match="'test'"):
+        samples.fetch_hub_split("stub/repo", "test")
+
+
+def test_fetch_hub_split_turns_a_network_failure_into_a_setup_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """These sources download on demand, so an offline run must say so."""
+
+    def explode() -> StubHubApi:
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(samples, "HfApi", explode)
+    with pytest.raises(samples.SampleSourceUnavailable, match="network"):
+        samples.fetch_hub_split("stub/repo", "test")
+
+
+def test_every_loader_is_wired_up() -> None:
+    """All four categories now have a source, so none may be a stub."""
+    for loader in samples.LOADERS.values():
+        assert "no source wired up" not in (loader.__doc__ or "")

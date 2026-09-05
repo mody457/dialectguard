@@ -59,6 +59,15 @@ NON_GULF_DIALECTS: tuple[str, ...] = (
     "MA", "DZ", "TN", "LY",
 )
 
+# BBC Arabic, taken as headlines rather than article bodies. Headlines are one
+# edited sentence of Modern Standard Arabic, which keeps this category's length
+# distribution close to the tweet reference (median 55 characters against 71).
+# Article bodies average around 2500 characters, so they would be rejected on
+# length and the report would show a body-size shift instead of a dialect one.
+MSA_REPO_ID = "Abdelkareem/arabic-bbc-news"
+MSA_SPLIT = "train"
+MSA_TEXT_COLUMN = "title"
+
 
 class SampleSourceUnavailable(RuntimeError):
     """A category's source is missing, or not wired up yet.
@@ -238,18 +247,29 @@ def load_english(count: int, seed: int) -> list[str]:
 
 
 def load_msa(count: int, seed: int) -> list[str]:
-    """Not wired up yet. Needs a short-form Modern Standard Arabic corpus.
+    """Draw Modern Standard Arabic headlines, the sharpest of the three shifts.
 
-    This is the sharpest of the three shifted categories and the one with no
-    source in the repo. MSA is Arabic script, so it clears validation, reaches
-    the model, and comes back with a confident Gulf country code that cannot be
-    right. That is the drift worth measuring.
+    MSA is Arabic script, so it clears validation, reaches the model, and comes
+    back with a confident Gulf country code that cannot be right. Nothing in
+    the pipeline can notice: there is no MSA label to predict and no signal in
+    the response that the input was out of domain. That is the drift worth
+    measuring, and the reason this category matters more than the English one,
+    which at least gets refused.
+
+    The source dataset is not the one the model was trained on, because none
+    exists. QADI's 18 labels are all country dialects with no MSA class, so
+    there is no way to hold the corpus fixed the way non_gulf_dialect does.
+    That leaves a confound worth stating: news headlines differ from tweets in
+    register and subject as well as in variety, so a shift here is MSA news
+    writing against Gulf tweets, not MSA against dialect in the abstract.
     """
-    raise SampleSourceUnavailable(
-        "The msa loader has no source wired up. It needs roughly 300 short "
-        "Modern Standard Arabic sentences from a Wikipedia or news headline "
-        "dataset. QADI cannot supply them: its 18 labels are all country "
-        "dialects, with no MSA class."
+    frame = fetch_hub_split(MSA_REPO_ID, MSA_SPLIT)
+    if MSA_TEXT_COLUMN not in frame.columns:
+        raise SampleSourceUnavailable(
+            f"{MSA_REPO_ID} has no {MSA_TEXT_COLUMN!r} column."
+        )
+    return draw_distinct(
+        frame[MSA_TEXT_COLUMN], count, seed, f"{MSA_REPO_ID} {MSA_TEXT_COLUMN}s"
     )
 
 
