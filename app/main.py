@@ -13,6 +13,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, Request, status
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
@@ -33,6 +35,7 @@ from app.config import (
 from app.errors import APIError, error_response, register_exception_handlers
 from app.logging_config import configure_logging
 from app.model import DialectClassifier
+from app.rate_limit import handle_rate_limit_exceeded, limiter
 from app.schemas import (
     ErrorResponse,
     HealthResponse,
@@ -73,6 +76,7 @@ and whitespace is normalized, matching the training pipeline exactly.
 ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
     413: {"model": ErrorResponse, "description": "Request body over the byte cap."},
     422: {"model": ErrorResponse, "description": "Input rejected before inference."},
+    429: {"model": ErrorResponse, "description": "Per-client rate limit exceeded."},
     503: {"model": ErrorResponse, "description": "Model is not loaded."},
 }
 
@@ -100,6 +104,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 register_exception_handlers(app)
+
+# SlowAPIMiddleware reads the limiter off application state, and looks up the
+# handler for RateLimitExceeded on the app rather than raising it, so both
+# registrations are load-bearing.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, handle_rate_limit_exceeded)
 
 
 @app.middleware("http")
@@ -138,6 +148,13 @@ async def enforce_request_body_limit(
                 f"the maximum is {MAX_REQUEST_BODY_BYTES}.",
             )
     return await call_next(request)
+
+
+# Registered after enforce_request_body_limit, which puts it outside: Starlette
+# builds the stack so the last middleware added runs first. That is the order
+# wanted here, because a client past its limit should be turned away before the
+# service inspects anything about the request it sent.
+app.add_middleware(SlowAPIMiddleware)
 
 
 router = APIRouter(prefix=API_PREFIX, tags=["prediction"])
@@ -198,11 +215,16 @@ app.include_router(router)
     tags=["operations"],
     summary="Readiness check",
 )
+@limiter.exempt
 async def health(request: Request) -> HealthResponse:
     """Report whether the model is loaded, not merely whether the process runs.
 
     Use this as the readiness probe. A process that is up but has no weights
     in memory cannot serve traffic and should not receive any.
+
+    Exempt from the rate limit. The container HEALTHCHECK polls this on an
+    interval, so throttling it would let load make a healthy container look
+    unhealthy, which is the opposite of what a probe is for.
     """
     classifier = get_classifier(request)
     return HealthResponse(
@@ -218,8 +240,13 @@ async def health(request: Request) -> HealthResponse:
     tags=["operations"],
     summary="Build and model metadata",
 )
+@limiter.exempt
 async def version() -> VersionResponse:
-    """Return the versions a caller needs to reproduce or debug a prediction."""
+    """Return the versions a caller needs to reproduce or debug a prediction.
+
+    Exempt for the same reason as /health: it describes the deployment rather
+    than the classification contract, and runs no inference to protect.
+    """
     return VersionResponse(
         api_version=API_VERSION,
         model_version=MODEL_VERSION,
