@@ -18,8 +18,10 @@ import random
 from typing import Protocol
 
 import pandas as pd
+from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 
-from app.config import PROJECT_ROOT
+from app.config import ID_TO_DIALECT, PROJECT_ROOT, SOURCE_LABEL_NAMES
 
 # Large enough for the drift statistics to mean something, small enough that a
 # full simulation is a couple of minutes of local inference.
@@ -38,6 +40,25 @@ ALL_CATEGORIES: tuple[str, ...] = (REFERENCE_CATEGORY, *CURRENT_CATEGORIES)
 REFERENCE_SPLIT = "test"
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data" / "processed"
 
+HUB_REPO_TYPE = "dataset"
+
+# The Gulf splits under data/processed are the Gulf subset of this dataset, so
+# its test split is the exact complement of the reference: same corpus, same
+# collection, same split, only the dialect differs. That is what makes the
+# comparison a dialect shift rather than a change of source.
+NON_GULF_REPO_ID = "Abdelrahman-Rezk/Arabic_Dialect_Identification"
+NON_GULF_SPLIT = "test"
+
+# Egyptian, Levantine and Maghrebi. Iraqi, Yemeni and Sudanese are left out
+# deliberately. They border the Gulf and share features with it, so a Gulf
+# label on one of them is not clearly wrong, and this category is only useful
+# if every row in it is Arabic the model has no right answer for.
+NON_GULF_DIALECTS: tuple[str, ...] = (
+    "EG",
+    "LB", "JO", "SY", "PL",
+    "MA", "DZ", "TN", "LY",
+)
+
 
 class SampleSourceUnavailable(RuntimeError):
     """A category's source is missing, or not wired up yet.
@@ -51,6 +72,67 @@ class SampleLoader(Protocol):
     """Return `count` texts for one category, deterministically for a seed."""
 
     def __call__(self, count: int, seed: int) -> list[str]: ...
+
+
+def fetch_hub_split(repo_id: str, split: str) -> pd.DataFrame:
+    """Download one split of a Hub dataset and return it as a frame.
+
+    The split's parquet file is resolved from the repo listing rather than
+    named outright, because one of these repos suffixes its filenames with a
+    content hash that changes whenever the data is re-uploaded.
+
+    Only the file backing the requested split is fetched. Reading these through
+    datasets.load_dataset would pull every split in the repo, which for the
+    dialect corpus means 48MB of training rows to reach a 1MB test split, and
+    would add a dependency for work huggingface-hub already does.
+
+    Raises:
+        SampleSourceUnavailable: if the repo, the split or the network is not
+            there. These sources are fetched on demand, so an unreachable Hub
+            is a setup problem for the operator rather than a bug.
+    """
+    try:
+        listing = HfApi().list_repo_files(repo_id, repo_type=HUB_REPO_TYPE)
+        candidates = sorted(
+            name
+            for name in listing
+            if name.startswith(f"data/{split}-") and name.endswith(".parquet")
+        )
+        if not candidates:
+            raise SampleSourceUnavailable(
+                f"{repo_id} has no parquet file for the {split!r} split."
+            )
+        frames = [
+            pd.read_parquet(
+                hf_hub_download(repo_id, name, repo_type=HUB_REPO_TYPE)
+            )
+            for name in candidates
+        ]
+    except (OSError, EntryNotFoundError) as exc:
+        raise SampleSourceUnavailable(
+            f"Could not read the {split!r} split of {repo_id} from the "
+            f"HuggingFace Hub. These sources are downloaded on demand, so "
+            f"this needs a working network connection. ({exc})"
+        ) from exc
+
+    return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+
+
+def draw_distinct(texts: pd.Series, count: int, seed: int, source: str) -> list[str]:
+    """Sample `count` distinct non-empty texts, or say why it could not.
+
+    Duplicates are dropped before sampling rather than after, so the result is
+    always the requested size. A report built on the same sentence repeated
+    would show a confidence distribution far tighter than real traffic.
+    """
+    cleaned = texts.dropna().astype(str).str.strip()
+    usable = cleaned[cleaned.str.len() > 0].drop_duplicates()
+    if count > len(usable):
+        raise SampleSourceUnavailable(
+            f"{source} yields {len(usable)} distinct texts, but {count} were "
+            f"requested."
+        )
+    return [str(value) for value in usable.sample(n=count, random_state=seed)]
 
 
 def load_in_distribution(count: int, seed: int) -> list[str]:
@@ -171,20 +253,73 @@ def load_msa(count: int, seed: int) -> list[str]:
     )
 
 
-def load_non_gulf_dialect(count: int, seed: int) -> list[str]:
-    """Not wired up yet. Needs the non-Gulf rows of the source dataset.
+def non_gulf_label_ids() -> dict[int, str]:
+    """Map the source label ids this category draws from to their codes.
 
-    The parquet splits in this repo carry the Gulf subset only, and the eval
-    harness raises on any label id outside it, so these rows have to come back
-    from the original dataset rather than from data/processed.
+    Built from SOURCE_LABEL_NAMES so the ids are never written down here, and
+    checked against ID_TO_DIALECT so a dialect the model actually predicts can
+    never end up in the shifted set. That check is the point: if the two ever
+    overlap, the report would compare Gulf traffic against Gulf traffic and
+    show no drift, which reads as a passing monitor rather than a broken one.
+
+    Raises:
+        ValueError: if a selected dialect is unknown to the source dataset or
+            is one of the six the model emits.
     """
-    raise SampleSourceUnavailable(
-        "The non_gulf_dialect loader has no source wired up. It should pull "
-        "Egyptian, Levantine and Maghrebi rows at run time from the "
-        "HuggingFace dataset Abdelrahman-Rezk/Arabic_Dialect_Identification. "
-        "Those are source label ids outside the Gulf six, which the parquet "
-        "splits in this repo do not carry."
-    )
+    ids: dict[int, str] = {}
+    for code in NON_GULF_DIALECTS:
+        if code not in SOURCE_LABEL_NAMES:
+            raise ValueError(f"{code!r} is not a source dataset label.")
+        if code in ID_TO_DIALECT:
+            raise ValueError(f"{code!r} is one of the six dialects the model predicts.")
+        ids[SOURCE_LABEL_NAMES.index(code)] = code
+    return ids
+
+
+def load_non_gulf_dialect(count: int, seed: int) -> list[str]:
+    """Draw Egyptian, Levantine and Maghrebi rows: Arabic with no right label.
+
+    These come from the test split of the dataset the Gulf splits under
+    data/processed were carved out of, so the only thing separating this
+    category from the reference is the dialect. Same corpus, same collection,
+    same split. A shift in the report is therefore about the text rather than
+    about switching sources, which is not something a corpus scraped somewhere
+    else could support.
+
+    Unlike the reference, the draw is stratified evenly across the dialects.
+    The reference keeps its class imbalance because that is the distribution
+    the documented macro F1 was measured on. This category has no such
+    distribution to honour: its per-dialect counts are an artifact of how much
+    each country tweets, and left alone the draw would be mostly Egyptian and
+    would really be measuring one dialect rather than nine.
+    """
+    frame = fetch_hub_split(NON_GULF_REPO_ID, NON_GULF_SPLIT)
+    missing = {"text", "label"} - set(frame.columns)
+    if missing:
+        raise SampleSourceUnavailable(
+            f"{NON_GULF_REPO_ID} is missing columns: {sorted(missing)}."
+        )
+
+    wanted = non_gulf_label_ids()
+    per_dialect, remainder = divmod(count, len(wanted))
+
+    texts: list[str] = []
+    for position, (label_id, code) in enumerate(sorted(wanted.items())):
+        # The remainder goes to the first few dialects in label id order, so an
+        # uneven count still splits the same way on every run.
+        quota = per_dialect + (1 if position < remainder else 0)
+        if not quota:
+            continue
+        rows = frame.loc[frame["label"] == label_id, "text"]
+        texts.extend(
+            draw_distinct(
+                rows, quota, seed, f"{NON_GULF_REPO_ID} {code} rows"
+            )
+        )
+
+    # Interleave the dialects so request order does not run country by country.
+    random.Random(seed).shuffle(texts)
+    return texts
 
 
 LOADERS: dict[str, SampleLoader] = {
