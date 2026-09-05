@@ -470,10 +470,18 @@ only. With no served rows there is no prediction distribution to compare, so
 `confidence` and `dialect` are dropped rather than reported as drift in an
 empty column.
 
-`non_gulf_dialect` shows 4 of 5 because one row of 300 failed the Arabic ratio
-gate, which is enough to move `error_code`. The real signal is the same shape
-as MSA: served normally, `dialect` and `confidence` both drifted, mean
-confidence down to 0.644.
+`non_gulf_dialect` reads as 4 of 5, but that fourth column is not a finding.
+One row of 300 failed the Arabic ratio gate. That single `NOT_ARABIC_DOMINANT`
+is enough to move `error_code` by itself, because the reference's own single
+refusal carried a different code (`TEXT_EMPTY_AFTER_PREPROCESSING`). Both sides
+served 299 of 300 and disagree on one row each. Read the count as 3 of 5 with a
+rounding error attached.
+
+The real signal is the same shape as MSA. The service served 299 of 300 and
+`status_code` did not move at all (p = 1.0), so the traffic looks ordinary from
+the outside, while `dialect` drifts at p = 1e-19 and `confidence` at p = 2e-13.
+Mean confidence falls to 0.644, lower than MSA's 0.708 but still nowhere near
+low enough for a threshold to separate it from ordinary traffic.
 
 ### Caveats on the sources
 
