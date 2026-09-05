@@ -3,9 +3,9 @@
 Gulf Arabic dialect classification API. Takes a piece of Arabic text and
 returns one of six country codes: OM, SA, KW, QA, BH, AE.
 
-Prediction, health and version endpoints run locally. The service builds as a
-Docker image, and CI runs lint, tests and the eval gate before publishing one.
-Drift monitoring runs against a local instance. Rate limiting is not built yet.
+Prediction, health and version endpoints run locally, rate limited per client.
+The service builds as a Docker image, and CI runs lint, tests and the eval gate
+before publishing one. Drift monitoring runs against a local instance.
 
 ## The problem it solves
 
@@ -183,6 +183,8 @@ All environment variables are optional. See `.env.example`.
 | `DIALECTGUARD_LOG_LEVEL` | `INFO` | Root log level |
 | `DIALECTGUARD_LOG_RAW_TEXT` | `false` | Include request text in prediction logs |
 | `DIALECTGUARD_GIT_COMMIT` | unset | Build commit, for environments with no `.git` |
+| `DIALECTGUARD_RATE_LIMIT` | `30/minute` | Per-client request allowance |
+| `DIALECTGUARD_TRUST_PROXY_HEADER` | `false` | Read the client address from `X-Forwarded-For` |
 
 Sequence length, label order and the Arabic-ratio threshold are deliberately
 not configurable. A typo in a deployment variable should not be able to cause
@@ -254,6 +256,7 @@ Every failure returns the same envelope, with no stack traces:
 | `TEXT_EMPTY_AFTER_PREPROCESSING` | `text` was nothing but mentions, hashtags or URLs |
 | `NOT_ARABIC_DOMINANT` | Fewer than 50% of the letters were Arabic script |
 | `TEXT_TOO_MANY_TOKENS` | Over 128 tokens after cleaning |
+| `RATE_LIMIT_EXCEEDED` | Client is over its request allowance (429) |
 | `MODEL_NOT_LOADED` | Model is not in memory (503) |
 | `INTERNAL_ERROR` | Unexpected server-side failure (500) |
 
@@ -283,6 +286,51 @@ Training padded every sequence to a full 128 tokens with
 time. The attention mask makes the two paths equivalent. Measured worst-case
 difference in output probability is 4.3e-07, which is float noise.
 
+## Rate limiting
+
+Thirty requests per minute per client, refused with 429 and
+`RATE_LIMIT_EXCEEDED` once exceeded. Configurable through
+`DIALECTGUARD_RATE_LIMIT`.
+
+The number comes from what one process can serve. A forward pass costs about
+120ms on CPU and the container runs a single uvicorn worker on purpose, so
+sustained capacity is roughly 8 requests per second. Thirty a minute is one
+request every two seconds, which leaves any single caller far short of
+occupying the process while still being generous for ticket routing or comment
+filtering. A scraping loop hits it in about two seconds.
+
+Refusals carry `Retry-After` in seconds, so a client can back off without
+parsing the message:
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Rate limit of 30 per 1 minute exceeded. Retry after 58 seconds.",
+    "status_code": 429
+  }
+}
+```
+
+`/health` and `/version` are exempt. The container HEALTHCHECK polls `/health`
+on an interval, so throttling it would let load make a healthy container look
+unhealthy. Everything else is covered, including `/docs`.
+
+### Identifying the caller
+
+By default the bucket key is the socket peer address. `X-Forwarded-For` is
+ignored, which matters more than it sounds: the header is caller supplied, so
+honouring it on a directly exposed service lets anyone mint a fresh bucket per
+request. That is worse than having no limit, because it still looks like one.
+
+Set `DIALECTGUARD_TRUST_PROXY_HEADER=true` only where a reverse proxy you
+control is guaranteed to overwrite the header. Without it, a service behind a
+proxy sees every request coming from the proxy address and throttles all
+clients against one shared bucket.
+
+An API key would be the better identifier. This service has no authentication
+at all, so that is a larger change than a limit, and it is not built.
+
 ## Development
 
 ```bash
@@ -295,7 +343,7 @@ test code legitimately takes arguments it does not use, such as a fixture
 requested only for ordering or a stub whose signature has to match what it
 replaces. Turning them on would mean scattering `noqa` over correct code.
 
-102 tests. `tests/test_api.py` exercises the full HTTP path with the real model
+116 tests. `tests/test_api.py` exercises the full HTTP path with the real model
 loaded. It asserts status codes and response shape, not which dialect comes
 back, because at 61.8% macro F1 the label for any single example is not a
 stable contract.
@@ -539,7 +587,12 @@ country code and nothing to flag it.
 
 ### Operational gaps
 
-Rate limiting on `/api/v1/predict` is not built.
+The rate limit counts per process. The container runs one worker and scales by
+replicas, so N replicas allow N times the limit, and a client whose requests
+land on different replicas gets a proportionally larger allowance. At three
+replicas the effective ceiling is 90 a minute per client rather than 30. Fixing
+it means a shared store: slowapi takes a `storage_uri`, so pointing it at Redis
+is configuration rather than a rewrite, but nothing here runs Redis today.
 
 The monitoring harness is not covered by CI. Two of the four sample sources
 fetch from the HuggingFace Hub at run time, so running it in CI would put a
