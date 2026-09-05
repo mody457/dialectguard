@@ -90,6 +90,26 @@ LOG_RAW_TEXT = os.getenv("DIALECTGUARD_LOG_RAW_TEXT", "false").lower() in {
     "yes",
 }
 
+# Requests one client may make per window on the rate limited routes, in the
+# format the limits library parses ("30/minute", "5/second"). Environment
+# readable, unlike the label order above, because it is an operational ceiling
+# rather than a correctness constraint: setting it wrong costs throughput, not
+# a wrong answer. The default is roughly one request every two seconds, well
+# under what a single worker sustains at about 120ms per forward pass, so no
+# one client can occupy the process.
+RATE_LIMIT = os.getenv("DIALECTGUARD_RATE_LIMIT", "30/minute")
+
+# Take the client address from X-Forwarded-For instead of the socket peer.
+# Off by default, and the default is the point. The header is caller supplied,
+# so honouring it on a directly exposed service lets anyone mint a fresh bucket
+# per request, which is worse than having no limit because it looks like one.
+# Enable only where a proxy you control is guaranteed to overwrite it.
+TRUST_PROXY_HEADER = os.getenv("DIALECTGUARD_TRUST_PROXY_HEADER", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 
 def resolve_git_commit() -> str | None:
     """Return the current short git commit, or None if it cannot be determined.
