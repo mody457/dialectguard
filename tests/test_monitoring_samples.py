@@ -116,11 +116,10 @@ def test_load_in_distribution_is_deterministic_for_a_seed(
     assert len(first) == 30
 
 
-@pytest.mark.parametrize("category", ["msa", "non_gulf_dialect"])
-def test_unwired_loaders_name_what_they_need(category: str) -> None:
+def test_unwired_loaders_name_what_they_need() -> None:
     """An unwired source is a setup problem, so the message has to be usable."""
     with pytest.raises(samples.SampleSourceUnavailable) as excinfo:
-        samples.load_category(category, 10, samples.RANDOM_SEED)
+        samples.load_category("msa", 10, samples.RANDOM_SEED)
     assert "no source wired up" in str(excinfo.value)
 
 
@@ -133,3 +132,158 @@ def test_load_msa_explains_why_qadi_cannot_supply_it() -> None:
 def test_load_category_rejects_an_unknown_category() -> None:
     with pytest.raises(KeyError, match="gulf_arabic"):
         samples.load_category("gulf_arabic", 10, samples.RANDOM_SEED)
+
+
+def non_gulf_frame(rows_per_dialect: dict[str, int]) -> pd.DataFrame:
+    """Build a stand-in for the Hub split, ASCII so the console is safe.
+
+    Texts carry their dialect code so a test can tell which rows a draw took.
+    """
+    records: list[dict[str, object]] = []
+    for code, rows in rows_per_dialect.items():
+        label_id = samples.SOURCE_LABEL_NAMES.index(code)
+        for index in range(rows):
+            records.append(
+                {"id": len(records), "label": label_id, "text": f"{code} row {index}"}
+            )
+    return pd.DataFrame(records)
+
+
+def even_non_gulf_frame(rows_per_dialect: int = 50) -> pd.DataFrame:
+    return non_gulf_frame(dict.fromkeys(samples.NON_GULF_DIALECTS, rows_per_dialect))
+
+
+def test_non_gulf_label_ids_resolve_through_the_source_label_order() -> None:
+    """Ids are derived, never written down, so this pins what they resolve to."""
+    assert samples.non_gulf_label_ids() == {
+        10: "EG",
+        5: "LB",
+        6: "JO",
+        7: "SY",
+        11: "PL",
+        9: "MA",
+        14: "DZ",
+        16: "TN",
+        17: "LY",
+    }
+
+
+def test_non_gulf_dialects_never_overlap_the_predicted_six() -> None:
+    """An overlap would compare Gulf against Gulf and report no drift."""
+    assert not set(samples.NON_GULF_DIALECTS) & set(samples.ID_TO_DIALECT)
+
+
+def test_non_gulf_label_ids_rejects_a_dialect_the_source_does_not_have(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(samples, "NON_GULF_DIALECTS", ("EG", "ZZ"))
+    with pytest.raises(ValueError, match="ZZ"):
+        samples.non_gulf_label_ids()
+
+
+def test_non_gulf_label_ids_rejects_a_dialect_the_model_predicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard that keeps the shifted set genuinely shifted."""
+    monkeypatch.setattr(samples, "NON_GULF_DIALECTS", ("EG", "KW"))
+    with pytest.raises(ValueError, match="KW"):
+        samples.non_gulf_label_ids()
+
+
+def test_load_non_gulf_dialect_returns_the_count_all_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        samples, "fetch_hub_split", lambda repo, split: even_non_gulf_frame()
+    )
+    texts = samples.load_non_gulf_dialect(90, samples.RANDOM_SEED)
+    assert len(texts) == 90
+    assert len(set(texts)) == 90
+
+
+def test_load_non_gulf_dialect_draws_evenly_despite_a_skewed_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real split is mostly Egyptian. An unstratified draw would be too."""
+    skewed = non_gulf_frame(
+        {"EG": 400, "LB": 40, "JO": 40, "SY": 40, "PL": 40,
+         "MA": 40, "DZ": 40, "TN": 40, "LY": 40}
+    )
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: skewed)
+    texts = samples.load_non_gulf_dialect(90, samples.RANDOM_SEED)
+    per_dialect = pd.Series([text.split()[0] for text in texts]).value_counts()
+    assert set(per_dialect.index) == set(samples.NON_GULF_DIALECTS)
+    assert per_dialect.unique().tolist() == [10]
+
+
+def test_load_non_gulf_dialect_spreads_an_uneven_count_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """92 over 9 dialects cannot be even, but it must split the same way twice."""
+    monkeypatch.setattr(
+        samples, "fetch_hub_split", lambda repo, split: even_non_gulf_frame()
+    )
+    first = samples.load_non_gulf_dialect(92, samples.RANDOM_SEED)
+    assert len(first) == 92
+    assert first == samples.load_non_gulf_dialect(92, samples.RANDOM_SEED)
+
+
+def test_load_non_gulf_dialect_is_deterministic_for_a_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        samples, "fetch_hub_split", lambda repo, split: even_non_gulf_frame()
+    )
+    first = samples.load_non_gulf_dialect(45, 7)
+    assert first == samples.load_non_gulf_dialect(45, 7)
+    assert first != samples.load_non_gulf_dialect(45, 8)
+
+
+def test_load_non_gulf_dialect_does_not_order_the_run_by_dialect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sending country by country would confound dialect with request order."""
+    monkeypatch.setattr(
+        samples, "fetch_hub_split", lambda repo, split: even_non_gulf_frame()
+    )
+    codes = [text.split()[0] for text in samples.load_non_gulf_dialect(90, 42)]
+    assert codes != sorted(codes)
+
+
+def test_load_non_gulf_dialect_names_the_dialect_it_ran_short_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A thin dialect has to be identifiable, not just a count that came up low."""
+    thin = non_gulf_frame(
+        {"EG": 50, "LB": 50, "JO": 50, "SY": 50, "PL": 50,
+         "MA": 50, "DZ": 50, "TN": 50, "LY": 2}
+    )
+    monkeypatch.setattr(samples, "fetch_hub_split", lambda repo, split: thin)
+    with pytest.raises(samples.SampleSourceUnavailable, match="LY"):
+        samples.load_non_gulf_dialect(90, samples.RANDOM_SEED)
+
+
+def test_load_non_gulf_dialect_rejects_a_split_without_the_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        samples,
+        "fetch_hub_split",
+        lambda repo, split: pd.DataFrame({"id": [1], "label": [10]}),
+    )
+    with pytest.raises(samples.SampleSourceUnavailable, match="text"):
+        samples.load_non_gulf_dialect(10, samples.RANDOM_SEED)
+
+
+def test_draw_distinct_drops_duplicates_and_blanks() -> None:
+    """A report built on a repeated sentence would understate the spread."""
+    series = pd.Series(["one", "one", "  ", "two", None, "three", "three"])
+    drawn = samples.draw_distinct(series, 3, samples.RANDOM_SEED, "stub")
+    assert sorted(drawn) == ["one", "three", "two"]
+
+
+def test_draw_distinct_counts_distinct_rows_not_raw_rows() -> None:
+    """Four rows but two texts, so asking for three has to raise."""
+    series = pd.Series(["one", "one", "two", "two"])
+    with pytest.raises(samples.SampleSourceUnavailable, match="2 distinct"):
+        samples.draw_distinct(series, 3, samples.RANDOM_SEED, "stub")
