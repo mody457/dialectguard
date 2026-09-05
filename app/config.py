@@ -28,6 +28,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # real mapping has to live here.
 ID_TO_DIALECT: tuple[str, ...] = ("OM", "SA", "KW", "QA", "BH", "AE")
 
+# The 18 dialect labels of the source dataset, in the order its dataset card
+# lists them. ID_TO_DIALECT is the Gulf six carved out of this space, and the
+# ids below are what the parquet splits carry, so anything reading the source
+# data has to map through here to reach the six the model emits. It lives next
+# to ID_TO_DIALECT rather than in one of its consumers because the eval harness
+# and the drift sample sources both need it, and two copies is one too many.
+SOURCE_LABEL_NAMES: tuple[str, ...] = (
+    "OM", "SD", "SA", "KW", "QA", "LB", "JO", "SY", "IQ",
+    "MA", "EG", "PL", "YE", "BH", "DZ", "AE", "TN", "LY",
+)
+
 # Token budget used during fine-tuning, including [CLS] and [SEP]. Inputs
 # longer than this are rejected rather than truncated, so that a caller never
 # gets a confident prediction over a silently clipped sentence.
