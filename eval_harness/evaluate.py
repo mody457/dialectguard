@@ -39,16 +39,14 @@ from sklearn.metrics import (
 )
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from app.config import ID_TO_DIALECT, MAX_SEQUENCE_LENGTH, MODEL_DIR, PROJECT_ROOT
-from app.preprocessing import preprocess
-
-# The 18 dialect labels of the source dataset, in the order its dataset card
-# lists them. The parquet splits carry these ids, so they have to be mapped down
-# to the six the model emits before anything can be compared.
-SOURCE_LABEL_NAMES: tuple[str, ...] = (
-    "OM", "SD", "SA", "KW", "QA", "LB", "JO", "SY", "IQ",
-    "MA", "EG", "PL", "YE", "BH", "DZ", "AE", "TN", "LY",
+from app.config import (
+    ID_TO_DIALECT,
+    MAX_SEQUENCE_LENGTH,
+    MODEL_DIR,
+    PROJECT_ROOT,
+    SOURCE_LABEL_NAMES,
 )
+from app.preprocessing import preprocess
 
 # Documented macro F1 is 0.618. The gate sits below it so library drift cannot
 # fail a build over noise, while leaving no room for a real regression: a wrong
