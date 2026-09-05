@@ -9,7 +9,9 @@ example routing customer service tickets or filtering comments by origin.
 ## Status
 
 Minimum working version. Prediction, health and version endpoints run
-locally. Docker, CI, drift monitoring and rate limiting are not built yet.
+locally. The service builds as a Docker image, and CI runs lint, tests and the
+eval gate before publishing one. Rate limiting and drift monitoring are not
+built yet.
 
 ## Model
 
