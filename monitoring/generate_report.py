@@ -7,12 +7,22 @@ compared against the same reference rather than against each other, and each
 comparison gets its own report. A single blended current set would average an
 MSA shift together with an outright refusal and hide both.
 
-What gets compared is the service's behavior, not the input text. The columns
-are the prediction, its confidence, the status code and the error code. Text
-drift is deliberately absent: Evidently's text descriptors pull nltk corpora at
-report time, which would put a network dependency in the middle of a monitoring
-run, and the interesting signal here is what the service did rather than how
-the wording differed.
+Five columns are compared. Four are the service's behavior: the predicted
+dialect, its confidence, the status code and the error code. The fifth is the
+input length, which is the one thing here that describes the request rather
+than the response. It earns its place because the validation gate rejects on
+length, so a length shift is the leading indicator of a change in refusals, and
+because it says how much of a prediction shift might be length rather than
+dialect.
+
+Text content drift is deliberately absent. Evidently's text descriptors pull
+nltk corpora at report time, which would put a network dependency in the middle
+of a monitoring run, and the interesting signal is what the service did rather
+than how the wording differed.
+
+A category the service refuses outright drops to three columns, because with no
+served rows there is no prediction distribution to compare. See
+build_definition.
 """
 
 from __future__ import annotations
